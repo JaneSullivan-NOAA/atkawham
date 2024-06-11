@@ -4,7 +4,7 @@
 # 3) full state-space SCAA: NAA as random effects
 
 # install growth branch
-remotes::install_github(repo = 'GiancarloMCorrea/wham', ref='growth', INSTALL_opts = c("--no-docs", "--no-multiarch", "--no-demo"))
+# remotes::install_github(repo = 'GiancarloMCorrea/wham', ref='growth', INSTALL_opts = c("--no-docs", "--no-multiarch", "--no-demo"))
 
 # load wham
 library(wham)
@@ -53,6 +53,7 @@ input0 <- prepare_wham_input(asap3, # most info comes from this asap3 object
 # data list: we don't have the asap3 object, so we'll format our data list
 # manually
 names(input0$data)
+names(input0$data)[grepl('catch', names(input0$data))]
 input0$data$agg_catch
 input0$data$catch_aging_error
 input0$data$catch_paa

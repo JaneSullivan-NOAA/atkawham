@@ -5,7 +5,10 @@
 *.html
 ex1_table.csv
 compare_png
-
+proj
+retro
+.DS_Store
+*.xlsx
 # ADMB standard output files
 *.b0*
 *.bar
