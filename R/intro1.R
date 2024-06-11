@@ -157,16 +157,16 @@ check_convergence(m2)
 # Proj and model sel ----
 
 # # Save list of all fit models
-# mods <- list(m0=m0, m1=m1, m2=m2)
-# save("mods", file="ex1_models.RData")
+mods <- list(m0=m0, m1=m1, m2=m2)
+save("mods", file="ex1_models.RData")
 #
 # # Compare models by AIC and Mohn's rho...
-# res <- compare_wham_models(mods, table.opts=list(fname="ex1_table", sort=TRUE))
-# res$best
+res <- compare_wham_models(mods, table.opts=list(fname="ex1_table", sort=TRUE))
+res$best
 #
-# # Project best model... (need to fill in appropriate model object below)
-# # Use default values: 3-year projection, use average selectivity, M, etc. from last 5 years
-# mbest_proj <- project_wham(model=mods$m...)
+# Project best model... (need to fill in appropriate model object below)
+# Use default values: 3-year projection, use average selectivity, M, etc. from last 5 years
+m2_proj <- project_wham(model=mods$m2)
 #
 # # WHAM output plots for best model with projections
-# plot_wham_output(mod=mbest_proj, out.type='html')
+# plot_wham_output(mod=m2_proj, out.type='png')
