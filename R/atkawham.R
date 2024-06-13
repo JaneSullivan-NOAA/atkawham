@@ -9,16 +9,18 @@ library(ggplot2)
 library(PBSmodelling) # used for readList but I think that's it?
 # remotes::install_github(repo = 'GiancarloMCorrea/wham', ref='growth', INSTALL_opts = c("--no-docs", "--no-multiarch", "--no-demo"))
 library(wham)
-
+source('R/helper.R')
 theme_set(theme_bw())
 
 # admb i/o
 arep <- PBSmodelling::readList("mod22/For_R.rep")
-adat <- PBSmodelling::readList("mod22/am2022_forR.dat")
+# adat <- PBSmodelling::readList("mod22/am2022_forR.dat") # delete this once you've changed the code
+adat <- PBSmodelling::readList("mod22/am2022.dat")
+# ctl file will also be helpful for slx and recruitment controls
 sort(names(arep))
 sort(names(adat))
 
-# Make input data:
+# Make input data for basic_info:
 input_data = list()
 input_data$ages = adat$rec_age:adat$n_ages
 input_data$years = adat$styr:adat$endyr
@@ -44,7 +46,24 @@ input_data$catch_paa = array(as.matrix(tmp[,c(paste(1:n_ages))]), dim = c(input_
 input_data$catch_Neff = matrix(as.matrix(tmp$Neff), ncol = input_data$n_fleets, nrow = n_years) # Obs error
 input_data$use_catch_paa = matrix(as.matrix(tmp$use), ncol = input_data$n_fleets, nrow = n_years) # fit to data? 1/0
 
-# Agg index: ------ STOP
+# Agg index: ------
+names(adat)[grepl('ind|biom', names(adat))]
+tmp <- as.data.frame(cbind(adat$yrs_ind, # yrs with biomass
+                           matrix(1, ncol = input_data$n_indices, nrow = length(adat$yrs_ind)), # use_ind input (1=fit, 0=don't)
+                           adat$biom_std/adat$biom_ind, # convert to cv, log-se
+                           adat$biom_ind)) # biomass index
+names(tmp) <- c('year', 'use', 'cv', 'ind')
+tmp <- tidyr::expand_grid(year = input_data$years) %>% dplyr::full_join(tmp)
+tmp[is.na(tmp)] <- 0
+
+input_data$agg_indices = matrix(tmp$ind, ncol = input_data$n_indices, nrow = n_years) # Obs
+input_data$index_cv = matrix(tmp$cv, ncol = input_data$n_indices, nrow = n_years) # Obs error
+input_data$use_indices = matrix(as.matrix(tmp$use), ncol = input_data$n_indices, nrow = n_years) # fit to data? 1/0
+# Additional info for BTS:
+input_data$units_indices = matrix(1L, nrow = n_years, ncol = input_data$n_indices) # 0 = numbers, 1 = biomass
+input_data$fracyr_indices = matrix(adat$month_ind/12, ncol = input_data$n_indices, nrow = n_years) # fraction of the year when survey occurs
+
+# Age comps (index):
 names(adat)[grepl('ind', names(adat))]
 tmp <- as.data.frame(cbind(adat$yrs_ages_ind, # yrs with biomass
                            matrix(1, ncol = input_data$n_indices, nrow = length(adat$yrs_ages_ind)), # use_ind_paa input (1=fit, 0=don't)
@@ -53,44 +72,69 @@ tmp <- as.data.frame(cbind(adat$yrs_ages_ind, # yrs with biomass
 names(tmp) <- c('year', 'use', 'Neff', adat$rec_age:adat$n_ages)
 tmp <- tidyr::expand_grid(year = input_data$years) %>% dplyr::full_join(tmp)
 tmp[is.na(tmp)] <- 0
-input_data$agg_indices = matrix(adat$biom_ind, ncol = input_data$n_indices, nrow = n_years) # Obs
-input_data$index_cv = matrix(index_df$cv, ncol = input_data$n_indices, nrow = n_years) # Obs error
-# Additional info:
-input_data$units_indices = matrix(1L, nrow = n_years, ncol = input_data$n_indices) # 0 = numbers, 1 = biomass
-input_data$fracyr_indices = matrix(index_df$fr_yr, ncol = input_data$n_indices, nrow = n_years) # fraction of the year when survey occurs
+input_data$index_paa = array(as.matrix(tmp[,c(paste(1:n_ages))]), dim = c(input_data$n_indices, n_years, n_ages)) # Obs
+input_data$index_Neff = matrix(as.matrix(tmp$Neff), ncol = input_data$n_indices, nrow = n_years) # Obs error
+input_data$use_index_paa = matrix(as.matrix(tmp$use), ncol = input_data$n_indices, nrow = n_years) # fit to data? 1/0
 
-# Age comps (index):
-names(adat)[grepl('ind', names(adat))]
-tmp <- as.data.frame(cbind(adat$yrs_ages_ind, # yrs with age comps
-                           matrix(1, ncol = input_data$n_indices, nrow = length(adat$yrs_ages_ind)), # use_ind_paa input (1=fit, 0=don't)
-                           adat$sample_ages_ind, # Neff
-                           adat$page_ind)) # marginal ages
-names(tmp) <- c('year', 'use', 'Neff', adat$rec_age:adat$n_ages)
-tmp <- tidyr::expand_grid(year = input_data$years) %>% dplyr::full_join(tmp)
-tmp[is.na(tmp)] <- 0
-
-input_data$index_paa = array(as.matrix(index_comp_df[,3:12]), dim = c(input_data$n_indices, n_years, n_ages)) # Obs
-input_data$index_Neff = matrix(index_comp_df$Nsamp, ncol = input_data$n_indices, nrow = n_years) # Obs error
 # Selex pointers:
+# FLAG: Jim ctl pls - implement simple non-tv parametric slx for bridging purposes?
 input_data$selblock_pointer_fleets = matrix(1L, ncol = input_data$n_fleets, nrow = n_years)
 input_data$selblock_pointer_indices = matrix(2L, ncol = input_data$n_indices, nrow = n_years)
+
 # weight-at-age information:
-input_data$waa = array(0, dim = c(2, n_years, n_ages))
-input_data$waa[1,,] = as.matrix(waa_jan1_df[, 2:11]) # jan1 (survey, spawning)
-input_data$waa[2,,] = as.matrix(waa_jul1_df[, 2:11]) # jul1 (fishery)
-input_data$waa_pointer_fleets = 2
-input_data$waa_pointer_indices = 1
-input_data$waa_pointer_totcatch = 2
+names(adat)[grepl('wt', names(adat))]
+input_data$waa = array(0, dim = c(3, n_years, n_ages))
+input_data$waa[1,,] = matrix(adat$wt_age_pop, ncol = n_ages, nrow = n_years, byrow = TRUE) # population
+input_data$waa[2,,] = adat$wt_age_ind
+input_data$waa[3,,] = adat$wt_age_fsh
+input_data$waa_pointer_fleets = 3
+input_data$waa_pointer_indices = 2
+input_data$waa_pointer_totcatch = 3
 input_data$waa_pointer_ssb = 1
 input_data$waa_pointer_jan1 = 1
+
 # More information:
-input_data$maturity = as.matrix(maturity_df[,2:11]) # maturity
-input_data$fracyr_SSB = matrix(0, ncol = 1, nrow = n_years) # spawning fraction (0 = spawn at beginning of year)
-input_data$Fbar_ages = 1:10 # ages to include in mean F calculation
+input_data$maturity = matrix(adat$maturity, ncol = n_ages, nrow = n_years, byrow = TRUE) # maturity
+input_data$fracyr_SSB = matrix(8/12, ncol = 1, nrow = n_years) # spawning fraction
+input_data$Fbar_ages = 1:10 # ages to include in mean F calculation # *FLAG* check on this
 input_data$bias_correct_process = 1 # do process bias correction, 0 = no, 1 = yes
 input_data$bias_correct_observation = 1 # do obs bias correction, 0 = no, 1 = yes
 
 
+# prepare wham input -----
+
+input <- prepare_wham_input(model_name = 'Case1_empiricalWAA',
+                                basic_info = input_data,
+                                # N1_model=1: 2 fixed effects parameters: an
+                                # initial recruitment and an instantaneous
+                                # fishing mortality rate to generate an
+                                # equilibrium abundance at age.
+                                NAA_re = list(N1_model = 1,
+                                              N1_pars = c(1e+05, 0), # initial numbers in the first age class, and equilib F rate generating the rest of the NAA in the first year
+                                              recruit_model = 2, # # estimating a mean recruitment with yearly recruitment as random effects
+                                              recruit_pars = 1e+05, # mean rec
+                                              sigma = 'rec', # rand eff on rec devs, all other ages deterministic
+                                              cor = 'iid'),
+                            # FLAG! Jim, what are the M assumptions in amak? arep$Mest what are these values?
+                                M = list(model = 'constant', initial_means = 0.3),
+                                selectivity = list(model = c('double-normal', 'double-normal'),
+                                                   initial_pars = list(c(6,-0.5,0,0,-5,-3), c(5,-2,0,0,-5,-3)),
+                                                   n_selblocks = 2),
+                                catchability = list(initial_q = 1))
+
+show_selex(model = "double-normal", initial_pars = c(6,-0.5,0,0,-5,-3), ages = input_data$ages)
+
+# Fix some parameters:
+input$map$logit_q = factor(NA)
+input$map$log_N1_pars = factor(c(1,NA))
+
+my_model = wham::fit_wham(MakeADFun.silent = TRUE, input = input, do.retro = FALSE, do.osa = FALSE)
+
+
+
+
+
+# OLD ----
 
 waa_fsh <- as.data.frame(adat$wt_age_fsh)
 names(waa_fsh) <- 1:11

@@ -50,13 +50,16 @@ input0 <- prepare_wham_input(asap3, # most info comes from this asap3 object
                                               fix_pars=list(4:5,4,2:4)), # slx parameters to map off (where slx=1)
                              NAA_re = NULL # deterministic SCAA option in WHAM
 )
+
 # data list: we don't have the asap3 object, so we'll format our data list
 # manually
 names(input0$data)
 names(input0$data)[grepl('catch', names(input0$data))]
+names(input0$data)[grepl('index', names(input0$data))]
 input0$data$agg_catch
 input0$data$catch_aging_error
 input0$data$catch_paa
+input0$data$use_catch_paa
 input0$data$index_paa
 
 # parameters and map lists
@@ -102,7 +105,6 @@ input1 <- prepare_wham_input(asap3,
 )
 all(input1$par$log_NAA == input0$par$log_NAA) # should be TRUE
 input1$random # this is the difference
-which(!is.na(input0$map$log_NAA == input1$map$log_NAA))
 
 # sigmaR
 input0$map$log_NAA_sigma # not estimated
