@@ -153,7 +153,9 @@ df %>%
                        ssb = my_model$report()$SSB,
                        mod = 'wham')) %>%
   ggplot(aes(x = year, y = ssb, col = mod)) +
-  geom_line()
+  geom_line() +
+  labs(y = 'ssb (t)') +
+  scale_y_continuous(labels = scales::comma)
 
 # compare recruitment ----
 sort(names(arep))
@@ -168,7 +170,9 @@ df %>%
                        R = my_model$report()$NAA[,1]*1e3,
                        mod = 'wham')) %>%
   ggplot(aes(x = year, y = R, col = mod)) +
-  geom_line()
+  geom_line() +
+  labs(y = 'rec') +
+  scale_y_continuous(labels = scales::comma)
 
 
 # OLD ----
