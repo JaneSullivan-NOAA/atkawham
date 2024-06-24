@@ -38,7 +38,7 @@ names(adat)[grepl('fsh', names(adat))]
 tmp <- as.data.frame(cbind(adat$yrs_ages_fsh, # yrs with age comps
                            matrix(1, ncol = input_data$n_fleets, nrow = length(adat$yrs_ages_fsh)), # matrix of 1s for use_catch_paa input (1=fit, 0=don't)
                            adat$sample_ages_fsh, # Neff
-                           adat$page_fsh)) # marginal ages
+                           adat$page_fsh/rowSums(adat$page_fsh))) # marginal ages
 names(tmp) <- c('year', 'use', 'Neff', adat$rec_age:adat$n_ages)
 tmp <- tidyr::expand_grid(year = input_data$years) %>% dplyr::full_join(tmp)
 tmp[is.na(tmp)] <- 0
@@ -84,9 +84,9 @@ input_data$selblock_pointer_indices = matrix(2L, ncol = input_data$n_indices, nr
 # weight-at-age information:
 names(adat)[grepl('wt', names(adat))]
 input_data$waa = array(0, dim = c(3, n_years, n_ages))
-input_data$waa[1,,] = matrix(adat$wt_age_pop, ncol = n_ages, nrow = n_years, byrow = TRUE) # population
-input_data$waa[2,,] = adat$wt_age_ind
-input_data$waa[3,,] = adat$wt_age_fsh
+input_data$waa[1,,] = matrix(adat$wt_age_pop/1e3, ncol = n_ages, nrow = n_years, byrow = TRUE) # population
+input_data$waa[2,,] = adat$wt_age_ind/1e3
+input_data$waa[3,,] = adat$wt_age_fsh/1e3
 input_data$waa_pointer_fleets = 3
 input_data$waa_pointer_indices = 2
 input_data$waa_pointer_totcatch = 3
@@ -99,7 +99,6 @@ input_data$fracyr_SSB = matrix(8/12, ncol = 1, nrow = n_years) # spawning fracti
 input_data$Fbar_ages = 1:10 # ages to include in mean F calculation # *FLAG* check on this
 input_data$bias_correct_process = 1 # do process bias correction, 0 = no, 1 = yes
 input_data$bias_correct_observation = 1 # do obs bias correction, 0 = no, 1 = yes
-
 
 # prepare wham input -----
 
@@ -117,12 +116,18 @@ input <- prepare_wham_input(model_name = 'Case1_empiricalWAA',
                                               cor = 'iid'),
                             # FLAG! Jim, what are the M assumptions in amak? arep$Mest what are these values?
                                 M = list(model = 'constant', initial_means = 0.3),
-                                selectivity = list(model = c('double-normal', 'double-normal'),
-                                                   initial_pars = list(c(6,-0.5,0,0,-5,-3), c(5,-2,0,0,-5,-3)),
+                                # selectivity = list(model = c('double-normal', 'double-normal'),
+                                #                    initial_pars = list(c(6,-0.5,0,0,-5,-3), c(5,-2,0,0,-5,-3)),
+                                #                    n_selblocks = 2),
+                                selectivity = list(model = c('age-specific', 'age-specific'),
+                                                   initial_pars = list(scales::rescale(colMeans(arep$sel_fsh_1[,-c(1,2)])),
+                                                                       scales::rescale(colMeans(arep$sel_ind_1[,-c(1,2)]))),
+                                                   fix_pars = list(6:7, 8),
                                                    n_selblocks = 2),
                                 catchability = list(initial_q = 1))
 
-show_selex(model = "double-normal", initial_pars = c(6,-0.5,0,0,-5,-3), ages = input_data$ages)
+input$map$logit_selpars
+# show_selex(model = "double-normal", initial_pars = c(6,-0.5,0,0,-5,-3), ages = input_data$ages)
 
 # Fix some parameters:
 input$map$logit_q = factor(NA)
@@ -130,8 +135,40 @@ input$map$log_N1_pars = factor(c(1,NA))
 
 my_model = wham::fit_wham(MakeADFun.silent = TRUE, input = input, do.retro = FALSE, do.osa = FALSE)
 
+wham::check_convergence(my_model)
+plot_wham_output(mod = my_model, dir.main = 'base_wham', out.type = 'png')
 
+my_model$sdrep
+my_model
 
+# compare SSB ----
+sort(names(arep))
+names(arep)[grepl('SSB', names(arep))]
+df <- as.data.frame(arep$SSB)
+names(df) <- c('year', 'ssb', 'se', 'lci', 'uci')
+df %>%
+  mutate(mod = 'amak') %>%
+  select(year, ssb, mod) %>% #pull(ssb)
+  bind_rows(data.frame(year = input_data$years,
+                       ssb = my_model$report()$SSB,
+                       mod = 'wham')) %>%
+  ggplot(aes(x = year, y = ssb, col = mod)) +
+  geom_line()
+
+# compare recruitment ----
+sort(names(arep))
+names(arep)[grepl('R', names(arep))]
+df <- as.data.frame(arep$R)
+names(df) <- c('year', 'R', 'se', 'lci', 'uci')
+df %>%
+  mutate(mod = 'amak',
+         R = R*1e6) %>%
+  select(year, R, mod) %>%
+  bind_rows(data.frame(year = input_data$years,
+                       R = my_model$report()$NAA[,1]*1e3,
+                       mod = 'wham')) %>%
+  ggplot(aes(x = year, y = R, col = mod)) +
+  geom_line()
 
 
 # OLD ----
@@ -184,7 +221,10 @@ invsel <- function(y) -log((b-a)/(y-a)-1)
 sel <- function(x) a+(b-a)/(1+exp(-x))
 # logit <- function
 
+scales::rescale(colMeans(arep$sel_fsh_1[,-c(1,2)]))
+
 tmp <- scales::rescale(arep$sel_fsh_1[,-c(1,2)])
+tmp <- t(apply(tmp, 1, scales::rescale))
 
 tmp <- arep$sel_fsh_1[,-c(1,2)]
 tmp <- t(apply(tmp, 1, scales::rescale))
