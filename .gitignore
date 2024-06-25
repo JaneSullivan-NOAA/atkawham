@@ -1,6 +1,7 @@
 .Rproj.user
 .Rhistory
 *.RData
+*.png
 .Ruserdata
 *.html
 ex1_table.csv
