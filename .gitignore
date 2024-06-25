@@ -6,6 +6,8 @@
 ex1_table.csv
 compare_png
 base_wham
+*.rds
+m*
 proj
 retro
 .DS_Store
