@@ -1,0 +1,739 @@
+---
+title: "Atka Wham"
+output: html_document
+date: "2024-06-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(PBSmodelling) # used for readList but I think that's it?
+# remotes::install_github(repo = 'GiancarloMCorrea/wham', ref='growth', INSTALL_opts = c("--no-docs", "--no-multiarch", "--no-demo"))
+library(wham)
+source('helper.R')
+theme_set(theme_bw())
+```
+
+# Data loading
+
+```{r}
+# getwd()
+arep <- PBSmodelling::readList("../mod22/base/For_R.rep")
+# adat <- PBSmodelling::readList("mod22/am2022_forR.dat") # delete this once you've changed the code
+adat <- PBSmodelling::readList("../mod22/base/am2022.dat")
+# ctl file will also be helpful for slx and recruitment controls
+# sort(names(arep))
+# sort(names(adat))
+
+# Make input data for basic_info:
+input_data = list()
+input_data$ages = adat$rec_age:adat$n_ages
+input_data$years = adat$styr:adat$endyr
+input_data$n_fleets = adat$nfsh
+input_data$n_indices = adat$nind
+n_years = length(input_data$years)
+n_ages = length(input_data$ages)
+
+# Agg catch:
+input_data$agg_catch = matrix(adat$catch, ncol = input_data$n_fleets, nrow = n_years) # Obs
+input_data$catch_cv = matrix(adat$catch_cv, ncol = input_data$n_fleets, nrow = n_years) # Obs error
+
+# Age comps (fishery):
+# names(adat)[grepl('fsh', names(adat))]
+tmp <- as.data.frame(cbind(adat$yrs_ages_fsh, # yrs with age comps
+                           matrix(1, ncol = input_data$n_fleets, nrow = length(adat$yrs_ages_fsh)), # matrix of 1s for use_catch_paa input (1=fit, 0=don't)
+                           adat$sample_ages_fsh, # Neff
+                           adat$page_fsh/rowSums(adat$page_fsh))) # marginal ages
+names(tmp) <- c('year', 'use', 'Neff', adat$rec_age:adat$n_ages)
+tmp <- tidyr::expand_grid(year = input_data$years) %>% dplyr::full_join(tmp)
+tmp[is.na(tmp)] <- 0
+input_data$catch_paa = array(as.matrix(tmp[,c(paste(1:n_ages))]), dim = c(input_data$n_fleets, n_years, n_ages)) # Obs
+input_data$catch_Neff = matrix(as.matrix(tmp$Neff), ncol = input_data$n_fleets, nrow = n_years) # Obs error
+input_data$use_catch_paa = matrix(as.matrix(tmp$use), ncol = input_data$n_fleets, nrow = n_years) # fit to data? 1/0
+
+# Agg index: ------
+names(adat)[grepl('ind|biom', names(adat))]
+tmp <- as.data.frame(cbind(adat$yrs_ind, # yrs with biomass
+                           matrix(1, ncol = input_data$n_indices, nrow = length(adat$yrs_ind)), # use_ind input (1=fit, 0=don't)
+                           adat$biom_std/adat$biom_ind, # convert to cv, log-se
+                           adat$biom_ind)) # biomass index
+names(tmp) <- c('year', 'use', 'cv', 'ind')
+tmp <- tidyr::expand_grid(year = input_data$years) %>% dplyr::full_join(tmp)
+tmp[is.na(tmp)] <- 0
+
+input_data$agg_indices = matrix(tmp$ind, ncol = input_data$n_indices, nrow = n_years) # Obs
+input_data$index_cv = matrix(tmp$cv, ncol = input_data$n_indices, nrow = n_years) # Obs error
+input_data$use_indices = matrix(as.matrix(tmp$use), ncol = input_data$n_indices, nrow = n_years) # fit to data? 1/0
+# Additional info for BTS:
+input_data$units_indices = matrix(1L, nrow = n_years, ncol = input_data$n_indices) # 0 = numbers, 1 = biomass
+input_data$fracyr_indices = matrix(adat$month_ind/12, ncol = input_data$n_indices, nrow = n_years) # fraction of the year when survey occurs
+
+# Age comps (index):
+names(adat)[grepl('ind', names(adat))]
+tmp <- as.data.frame(cbind(adat$yrs_ages_ind, # yrs with biomass
+                           matrix(1, ncol = input_data$n_indices, nrow = length(adat$yrs_ages_ind)), # use_ind_paa input (1=fit, 0=don't)
+                           adat$sample_ages_ind, # Neff
+                           adat$page_ind)) # marginal ages
+names(tmp) <- c('year', 'use', 'Neff', adat$rec_age:adat$n_ages)
+tmp <- tidyr::expand_grid(year = input_data$years) %>% dplyr::full_join(tmp)
+tmp[is.na(tmp)] <- 0
+input_data$index_paa = array(as.matrix(tmp[,c(paste(1:n_ages))]), dim = c(input_data$n_indices, n_years, n_ages)) # Obs
+input_data$index_Neff = matrix(as.matrix(tmp$Neff), ncol = input_data$n_indices, nrow = n_years) # Obs error
+input_data$use_index_paa = matrix(as.matrix(tmp$use), ncol = input_data$n_indices, nrow = n_years) # fit to data? 1/0
+
+# Selex pointers:
+# FLAG: Jim ctl pls - implement simple non-tv parametric slx for bridging purposes?
+input_data$selblock_pointer_fleets = matrix(1L, ncol = input_data$n_fleets, nrow = n_years)
+input_data$selblock_pointer_indices = matrix(2L, ncol = input_data$n_indices, nrow = n_years)
+
+# weight-at-age information:
+names(adat)[grepl('wt', names(adat))]
+input_data$waa = array(0, dim = c(3, n_years, n_ages))
+input_data$waa[1,,] = matrix(adat$wt_age_pop/1e3, ncol = n_ages, nrow = n_years, byrow = TRUE) # population
+input_data$waa[2,,] = adat$wt_age_ind/1e3
+input_data$waa[3,,] = adat$wt_age_fsh/1e3
+input_data$waa_pointer_fleets = 3
+input_data$waa_pointer_indices = 2
+input_data$waa_pointer_totcatch = 3
+input_data$waa_pointer_ssb = 1
+input_data$waa_pointer_jan1 = 1
+
+# More information:
+input_data$maturity = matrix(adat$maturity, ncol = n_ages, nrow = n_years, byrow = TRUE) # maturity
+input_data$fracyr_SSB = matrix(8/12, ncol = 1, nrow = n_years) # spawning fraction
+input_data$Fbar_ages = 1:10 # ages to include in mean F calculation # *FLAG* check on this
+input_data$bias_correct_process = 1 # do process bias correction, 0 = no, 1 = yes
+input_data$bias_correct_observation = 1 # do obs bias correction, 0 = no, 1 = yes
+
+
+```
+
+# WHAM models
+
+## 0. Initial - Selex = age sp time inv 
+
+### Model set up
+
+
+```{r}
+# prepare wham input -----
+
+input <- prepare_wham_input(model_name = 'Case1_empiricalWAA',
+                                basic_info = input_data,
+                                # N1_model=1: 2 fixed effects parameters: an
+                                # initial recruitment and an instantaneous
+                                # fishing mortality rate to generate an
+                                # equilibrium abundance at age.
+                                NAA_re = list(N1_model = 1,
+                                              N1_pars = c(1e+05, 0), # initial numbers in the first age class, and equilib F rate generating the rest of the NAA in the first year
+                                              recruit_model = 2, # # estimating a mean recruitment with yearly recruitment as random effects
+                                              recruit_pars = 1e+05, # mean rec
+                                              sigma = 'rec', # rand eff on rec devs, all other ages deterministic
+                                              cor = 'iid'),
+                            # FLAG! Jim, what are the M assumptions in amak? arep$Mest what are these values?
+                                M = list(model = 'constant', initial_means = 0.3),
+                                # selectivity = list(model = c('double-normal', 'double-normal'),
+                                #                    initial_pars = list(c(6,-0.5,0,0,-5,-3), c(5,-2,0,0,-5,-3)),
+                                #                    n_selblocks = 2),
+                                selectivity = list(model = c('age-specific', 'age-specific'),
+                                                   initial_pars = list(scales::rescale(colMeans(arep$sel_fsh_1[,-c(1,2)])),
+                                                                       scales::rescale(colMeans(arep$sel_ind_1[,-c(1,2)]))),
+                                                   fix_pars = list(6:7, 8),
+                                                   n_selblocks = 2),
+                                catchability = list(initial_q = 1))
+
+# input$map$logit_selpars
+# show_selex(model = "double-normal", initial_pars = c(6,-0.5,0,0,-5,-3), ages = input_data$ages)
+
+# Fix some parameters:
+input$map$logit_q = factor(NA)
+input$map$log_N1_pars = factor(c(1,NA))
+
+my_model = wham::fit_wham(MakeADFun.silent = TRUE, input = input, do.retro = FALSE, do.osa = FALSE)
+
+wham::check_convergence(my_model)
+# plot_wham_output(mod = my_model, dir.main = 'base_wham', out.type = 'png')
+
+```
+
+### SSB/R trends compare to AMAK
+
+
+```{r}
+
+# compare SSB ----
+# sort(names(arep))
+# names(arep)[grepl('SSB', names(arep))]
+df <- as.data.frame(arep_dlog$SSB)
+names(df) <- c('year', 'ssb', 'se', 'lci', 'uci')
+df %>%
+  mutate(mod = 'amak_dlog') %>%
+  select(year, ssb, mod) %>% #pull(ssb)
+  bind_rows(data.frame(year = input_data$years,
+                       ssb = my_model$report()$SSB,
+                       mod = 'wham')) %>%
+  ggplot(aes(x = year, y = ssb, col = mod)) +
+  geom_line() +
+  labs(y = 'ssb (t)') +
+  scale_y_continuous(labels = scales::comma)
+
+# compare recruitment ----
+# sort(names(arep))
+# names(arep)[grepl('R', names(arep))]
+df <- as.data.frame(arep_dlog$R)
+names(df) <- c('year', 'R', 'se', 'lci', 'uci')
+df %>%
+  mutate(mod = 'amak_dlog',
+         R = R*1e6) %>%
+  select(year, R, mod) %>%
+  bind_rows(data.frame(year = input_data$years,
+                       R = my_model$report()$NAA[,1]*1e3,
+                       mod = 'wham')) %>%
+  ggplot(aes(x = year, y = R, col = mod)) +
+  geom_line() +
+  labs(y = 'rec') +
+  scale_y_continuous(labels = scales::comma)
+
+
+```
+
+
+
+## 1. explore selex option age sp + time varying
+
+### Design selex options 
+
+```{r}
+# m1-m5 age-specific
+sel_model <- c(rep("age-specific",5))
+
+# time-varying options for each of 2 blocks (b1 = fleet, b2 = indices)
+sel_re <- list(c("none","none"), # m1-m5 age-specific
+               c("iid","none"),
+               c("ar1","none"),
+               c("ar1_y","none"),
+               c("2dar1","none"))
+n.mods <- length(sel_re)
+
+# summary data frame
+df.mods <- data.frame(Model=paste0("m",1:n.mods),
+                      Selectivity=sel_model, # Selectivity model (same for all blocks)
+                      Block_1_re=sapply(sel_re, function(x) x[[1]])) # Block 1 random effects
+rownames(df.mods) <- NULL
+
+df.mods
+
+# # see currently specified selectivity options, from asap3 file:
+# asap3$dat$sel_block_assign # 1 fleet, all years assigned to block 1
+# # by default each index gets its own selectivity block (here, blocks 2 and 3)
+# 
+# asap3$dat$sel_block_option # fleet selectivity (1 block), 2 = logistic
+# asap3$dat$index_sel_option # index selectivity (2 blocks), 2 = logistic
+# asap3$dat$sel_ini # fleet sel initial values (col1), estimation phase (-1 = fix)
+# asap3$dat$index_sel_ini # index sel initial values (col1), estimation phase (-1 = fix)
+```
+
+### Setup and run models
+
+```{r}
+# mods_1st <- mods
+mods <- list()
+for(m in 1:n.mods){
+  if(sel_model[m] == "logistic"){ # logistic selectivity
+    # overwrite initial parameter values in ASAP data file (ex1_SNEMAYT.dat)
+    input <- prepare_wham_input(asap3, model_name=paste(paste0("Model ",m), sel_model[m], paste(sel_re[[m]], collapse="-"), sep=": "), recruit_model=2,
+                                selectivity=list(model=rep("logistic",3), re=sel_re[[m]], initial_pars=list(c(2,0.3),c(2,0.3),c(2,0.3))),
+                                NAA_re = list(sigma='rec+1',cor='iid'),
+                                age_comp = "logistic-normal-miss0") # logistic normal, treat 0 obs as missing
+  } else { # age-specific selectivity
+    # # you can try not fixing any ages first
+    # input <- prepare_wham_input(asap3, model_name=paste(paste0("Model ",m), sel_model[m], paste(sel_re[[m]], collapse="-"), sep=": "), recruit_model=2,
+    # 			selectivity=list(model=rep("age-specific",3), re=sel_re[[m]],
+    # 				initial_pars=list(rep(0.5,6), rep(0.5,6), rep(0.5,6))),
+    # 			NAA_re = list(sigma='rec+1',cor='iid'),
+    #           age_comp = "logistic-normal-miss0") # logistic normal, treat 0 obs as missing
+
+    # often need to fix selectivity = 1 for at least one age per age-specific block: ages 4-6 / 4 / 3-6
+    input <- prepare_wham_input(model_name = paste(paste0("Model ",m), sel_model[m], paste(sel_re[[m]], collapse="-"), sep=": "),
+                                basic_info = input_data,
+                                # N1_model=1: 2 fixed effects parameters: an
+                                # initial recruitment and an instantaneous
+                                # fishing mortality rate to generate an
+                                # equilibrium abundance at age.
+                                NAA_re = list(N1_model = 1,
+                                              N1_pars = c(1e+05, 0), # initial numbers in the first age class, and equilib F rate generating the 
+                                              #rest of the NAA in the first year
+                                              recruit_model = 2, # # estimating a mean recruitment with yearly recruitment as random effects
+                                              recruit_pars = 1e+05, # mean rec
+                                              sigma = 'rec', # rand eff on rec devs, all other ages deterministic
+                                              cor = 'iid'),
+                                
+                                # FLAG! Jim, what are the M assumptions in amak? arep$Mest what are these values?
+                                M = list(model = 'constant', initial_means = 0.3),
+
+                                selectivity=list(model=rep("age-specific",2), re=sel_re[[m]],
+                                                 initial_pars = list(scales::rescale(colMeans(arep$sel_fsh_1[,-c(1,2)])),
+                                                                     scales::rescale(colMeans(arep$sel_ind_1[,-c(1,2)]))),
+                                                 fix_pars=list(6:7, 8),
+                                                 n_selblocks = 2),
+                            
+                                catchability = list(initial_q = 1))
+    
+    
+  }
+
+  # Fix some parameters:
+input$map$logit_q = factor(NA)
+input$map$log_N1_pars = factor(c(1,NA))
+
+  # fit model
+  mod <- fit_wham(input, MakeADFun.silent = TRUE,do.check=T, do.osa=F, do.proj=F, do.retro=F)
+  mods[[m]] <- mod
+  # saveRDS(mod, file=paste0("m",m,".rds"))
+}
+
+
+```
+
+
+### Model convergence 
+
+```{r}
+
+# -----------------------------------------------------------------------
+# mod.list <- file.path(write.dir,paste0("m",1:n.mods,".rds"))
+# mods <- lapply(mod.list, readRDS)
+
+# check which models converged
+vign4_conv <- lapply(mods, function(x) capture.output(check_convergence(x)))
+for(m in 1:n.mods) cat(paste0("Model ",m,":"), vign4_conv[[m]], "", sep='\n')
+
+# plot output for converged models
+ok_sdrep = sapply(mods, function(x) if(x$na_sdrep==FALSE & !is.na(x$na_sdrep)) 1 else 0)
+pdHess <- as.logical(ok_sdrep)
+conv <- sapply(mods, function(x) x$opt$convergence == 0) # 0 means opt converged
+conv_mods <- (1:n.mods)[pdHess]
+# for(m in conv_mods){
+#   # plot_wham_output(mod=mods[[m]], out.type='html', dir.main=file.path(write.dir,paste0("m",m)))
+#   plot_wham_output(mod=mods[[m]], out.type='png', dir.main=file.path(write.dir,paste0("m",m)))
+#   # plot_wham_output(mod=mods[[m]], out.type='pdf', dir.main=file.path(write.dir,paste0("m",m)), plot.opts=list(font.family="Times"))
+# }
+
+# compare models using AIC
+df.aic <- as.data.frame(compare_wham_models(mods, table.opts=list(sort=FALSE, calc.rho=FALSE))$tab)
+df.aic[!pdHess,] = NA
+minAIC <- min(df.aic$AIC, na.rm=T)
+df.aic$dAIC <- round(df.aic$AIC - minAIC,1)
+df.mods <- cbind(data.frame(Model=paste0("m",1:n.mods), Selectivity=sel_model,
+                            "Block1_re"=sapply(sel_re, function(x) x[[1]]),
+                            "opt_converged"= ifelse(conv, "Yes", "No"),
+                            "pd_hessian"= ifelse(pdHess, "Yes", "No"),
+                            "NLL"=sapply(mods, function(x) round(x$opt$objective,3)),
+                            "Runtime"=sapply(mods, function(x) x$runtime)), 
+                            'npar'=sapply(mods,function(x){length(x$opt$par)}),df.aic)
+rownames(df.mods) <- NULL
+df.mods
+
+# save results table
+# write.csv(df.mods, file="ex4_table.csv",quote=F, row.names=F)
+
+```
+
+### Model comparison
+
+
+#### Selex
+
+```{r}
+# plot the models estimates of selectivity-at-age for block 1 (fleet).
+# selAA block 1 plots
+selAA <- lapply(mods, function(x) x$report()$selAA[[1]])
+sel_mod <- factor(c("Age-specific")[sapply(mods, function(x) x$env$data$selblock_models[1])], levels=c("Age-specific"))
+sel_cor <- factor(c("None","IID","AR1","AR1_y","2D AR1")[sapply(mods, function(x) x$env$data$selblock_models_re[1])], levels=c("None","IID","AR1","AR1_y","2D AR1"))
+df.selAA <- data.frame(matrix(NA, nrow=0, ncol=length( my_model$input$ages.lab)+5))
+colnames(df.selAA) <- c(paste0("Age_", 1:11),"Year","Model","conv","sel_mod","sel_cor")
+for(m in 1:n.mods){
+  df <- as.data.frame(selAA[[m]])
+  df$Year <- input$years
+  colnames(df) <- c(paste0("Age_", 1:11),"Year")
+  df$Model <- m
+  df$conv <- ifelse(df.mods$pd_hessian[m]=="Yes",1,0)
+  df$sel_mod = sel_mod[m]
+  df$sel_cor = sel_cor[m]
+  df.selAA <- rbind(df.selAA, df)
+}
+df <- df.selAA %>% pivot_longer(-c(Year,Model,conv,sel_mod,sel_cor),
+                                names_to = "Age",
+                                names_prefix = "Age_",
+                                names_transform = list(Age = as.integer),
+                                values_to = "Selectivity")
+df$Age <- as.integer(df$Age)
+df$sel_mod <- factor(df$sel_mod, levels=c("Logistic","Age-specific"))
+df$sel_cor <- factor(df$sel_cor, levels=c("None","IID","AR1","AR1_y","2D AR1"))
+df$conv = factor(df$conv)
+
+# png(file.path(getwd(),"selAA.png"), width = 8, height = 7.5, res = 200, units='in')
+# print(
+  ggplot(df, aes(x=Year, y=Age)) +
+        geom_tile(aes(fill=Selectivity)) +
+        # geom_tile(aes(fill=Selectivity, alpha=conv)) +
+        # scale_alpha_discrete(range=c(0.4,1), guide=FALSE) +
+        # geom_label(aes(x=Year, y=Age, label=lab), size=5, alpha=1, #fontface = "bold",
+        #            data=data.frame(Year=1978.5, Age=5.8, lab=paste0("m",1:length(mods)), sel_mod=sel_mod, sel_cor=sel_cor)) +
+        facet_grid(rows=vars(sel_cor), cols=vars(sel_mod)) +
+        viridis::scale_fill_viridis() +
+        theme_bw() +
+        scale_x_continuous(expand=c(0,0)) +
+        scale_y_continuous(expand=c(0,0))
+  # )
+# dev.off()
+
+  
+  df %>% 
+    ggplot()+
+    geom_line(aes(Age,Selectivity,col=Year,group=Year))+ facet_wrap(~Model)
+  
+    df %>% mutate(Model=as.factor(Model)) %>% 
+      # filter(Model %in% c(1,2)) %>%
+    ggplot()+
+    geom_line(aes(Age,Selectivity,col=Model,group=Model))+ facet_wrap(~Year)
+    
+    
+df %>% mutate(Model=as.factor(Model)) %>% 
+      # filter(Model %in% c(1,2)) %>%
+    ggplot()+
+      geom_line(aes(Age,Selectivity,col=Model,group=Model))+ facet_grid(Year~Model)+
+      scale_x_continuous(breaks = c(1:11))+
+      theme(strip.text.y = element_blank(),
+                strip.background.y = element_blank(),legend.position='none',
+                panel.spacing.y = unit(.01, 'cm'))
+```
+
+
+#### SSB/Rec trends
+
+```{r}
+purrr::map_dfr(mods,function(x){data.frame(year=x$years,
+                                           version=x$model_name,
+                                           ssb=x$rep$SSB,
+                                           R=x$rep$NAA[,1]*1e3)}) %>% 
+  bind_rows(data.frame(year=x$years,
+                                           version=x$model_name,
+                                           ssb=x$rep$SSB,
+                                           R=x$rep$NAA[,1]*1e3)})
+# compare SSB ----
+# sort(names(arep))
+# names(arep)[grepl('SSB', names(arep))]
+df <- as.data.frame(arep$SSB)
+names(df) <- c('year', 'ssb', 'se', 'lci', 'uci')
+df %>%
+  mutate(mod = 'amak') %>%
+  select(year, ssb, mod) %>% #pull(ssb)
+  bind_rows(data.frame(year = input_data$years,
+                       ssb = my_model$report()$SSB,
+                       mod = 'wham')) %>%
+  ggplot(aes(x = year, y = ssb, col = mod)) +
+  geom_line() +
+  labs(y = 'ssb (t)') +
+  scale_y_continuous(labels = scales::comma)
+
+# compare recruitment ----
+# sort(names(arep))
+# names(arep)[grepl('R', names(arep))]
+df <- as.data.frame(arep$R)
+names(df) <- c('year', 'R', 'se', 'lci', 'uci')
+df %>%
+  mutate(mod = 'amak',
+         R = R*1e6) %>%
+  select(year, R, mod) %>%
+  bind_rows(data.frame(year = input_data$years,
+                       R = my_model$report()$NAA[,1]*1e3,
+                       mod = 'wham')) %>%
+  ggplot(aes(x = year, y = R, col = mod)) +
+  geom_line() +
+  labs(y = 'rec') +
+  scale_y_continuous(labels = scales::comma)
+
+
+```
+
+
+## Selex option double logistic 
+
+
+### Design selex options 
+
+```{r}
+# m1-m5 age-specific
+sel_model <- c(rep("double-logistic",5))
+
+# time-varying options for each of 2 blocks (b1 = fleet, b2 = indices)
+sel_re <- list(c("none","none"), # m1-m5 age-specific
+               c("iid","none"),
+               c("ar1","none"),
+              # c("ar1_y","none"),
+               c("2dar1","none"))
+n.mods <- length(sel_re)
+
+# summary data frame
+df.mods <- data.frame(Model=paste0("m",1:n.mods),
+                      Selectivity=sel_model, # Selectivity model (same for all blocks)
+                      Block_1_re=sapply(sel_re, function(x) x[[1]])) # Block 1 random effects
+rownames(df.mods) <- NULL
+
+df.mods
+
+# # see currently specified selectivity options, from asap3 file:
+# asap3$dat$sel_block_assign # 1 fleet, all years assigned to block 1
+# # by default each index gets its own selectivity block (here, blocks 2 and 3)
+# 
+# asap3$dat$sel_block_option # fleet selectivity (1 block), 2 = logistic
+# asap3$dat$index_sel_option # index selectivity (2 blocks), 2 = logistic
+# asap3$dat$sel_ini # fleet sel initial values (col1), estimation phase (-1 = fix)
+# asap3$dat$index_sel_ini # index sel initial values (col1), estimation phase (-1 = fix)
+```
+
+### Setup and run models
+
+```{r}
+# mods_1st <- mods
+mods_dlog <- list()
+for(m in 1:n.mods){
+  if(sel_model[m] == "double-logistic"){ # logistic selectivity
+    # overwrite initial parameter values in ASAP data file (ex1_SNEMAYT.dat)
+    input <- prepare_wham_input(input_data, 
+                                model_name=paste(paste0("Model ",m), sel_model[m], paste(sel_re[[m]], collapse="-"), sep=": "), 
+                                 NAA_re = list(N1_model = 1,
+                                              N1_pars = c(1e+05, 0), # initial numbers in the first age class, and equilib F rate generating the 
+                                              #rest of the NAA in the first year
+                                              recruit_model = 2, # # estimating a mean recruitment with yearly recruitment as random effects
+                                              recruit_pars = 1e+05, # mean rec
+                                              sigma = 'rec', # rand eff on rec devs, all other ages deterministic
+                                              cor = 'iid'),
+                                
+                                # FLAG! Jim, what are the M assumptions in amak? arep$Mest what are these values?
+                                M = list(model = 'constant', initial_means = 0.3),
+                                
+                                selectivity=list(model=rep("double-logistic",2), 
+                                  re=sel_re[[m]],
+                                  initial_pars=list(c(2,0.3),c(2,0.3),c(2,0.3))),
+                                
+                                age_comp = "logistic-normal-miss0") # logistic normal, treat 0 obs as missing
+  } else { # age-specific selectivity
+
+    # often need to fix selectivity = 1 for at least one age per age-specific block: ages 4-6 / 4 / 3-6
+    input <- prepare_wham_input(model_name = paste(paste0("Model ",m), sel_model[m], paste(sel_re[[m]], collapse="-"), sep=": "),
+                                basic_info = input_data,
+                                # N1_model=1: 2 fixed effects parameters: an
+                                # initial recruitment and an instantaneous
+                                # fishing mortality rate to generate an
+                                # equilibrium abundance at age.
+                                NAA_re = list(N1_model = 1,
+                                              N1_pars = c(1e+05, 0), # initial numbers in the first age class, and equilib F rate generating the 
+                                              #rest of the NAA in the first year
+                                              recruit_model = 2, # # estimating a mean recruitment with yearly recruitment as random effects
+                                              recruit_pars = 1e+05, # mean rec
+                                              sigma = 'rec', # rand eff on rec devs, all other ages deterministic
+                                              cor = 'iid'),
+                                
+                                # FLAG! Jim, what are the M assumptions in amak? arep$Mest what are these values?
+                                M = list(model = 'constant', initial_means = 0.3),
+
+                                selectivity=list(model=rep("age-specific",2), re=sel_re[[m]],
+                                                 initial_pars = list(scales::rescale(colMeans(arep$sel_fsh_1[,-c(1,2)])),
+                                                                     scales::rescale(colMeans(arep$sel_ind_1[,-c(1,2)]))),
+                                                 fix_pars=list(6:7, 8),
+                                                 n_selblocks = 2),
+                            
+                                catchability = list(initial_q = 1))
+    
+    
+  }
+
+  # Fix some parameters:
+input$map$logit_q = factor(NA)
+input$map$log_N1_pars = factor(c(1,NA))
+
+  # fit model
+  mod <- fit_wham(input, MakeADFun.silent = TRUE,do.check=T, do.osa=F, do.proj=F, do.retro=F)
+  mods[[m]] <- mod
+  # saveRDS(mod, file=paste0("m",m,".rds"))
+}
+
+
+```
+
+
+### Model convergence 
+
+```{r}
+
+# -----------------------------------------------------------------------
+# mod.list <- file.path(write.dir,paste0("m",1:n.mods,".rds"))
+# mods <- lapply(mod.list, readRDS)
+
+# check which models converged
+vign4_conv <- lapply(mods, function(x) capture.output(check_convergence(x)))
+for(m in 1:n.mods) cat(paste0("Model ",m,":"), vign4_conv[[m]], "", sep='\n')
+
+# plot output for converged models
+ok_sdrep = sapply(mods, function(x) if(x$na_sdrep==FALSE & !is.na(x$na_sdrep)) 1 else 0)
+pdHess <- as.logical(ok_sdrep)
+conv <- sapply(mods, function(x) x$opt$convergence == 0) # 0 means opt converged
+conv_mods <- (1:n.mods)[pdHess]
+# for(m in conv_mods){
+#   # plot_wham_output(mod=mods[[m]], out.type='html', dir.main=file.path(write.dir,paste0("m",m)))
+#   plot_wham_output(mod=mods[[m]], out.type='png', dir.main=file.path(write.dir,paste0("m",m)))
+#   # plot_wham_output(mod=mods[[m]], out.type='pdf', dir.main=file.path(write.dir,paste0("m",m)), plot.opts=list(font.family="Times"))
+# }
+
+# compare models using AIC
+df.aic <- as.data.frame(compare_wham_models(mods, table.opts=list(sort=FALSE, calc.rho=FALSE))$tab)
+df.aic[!pdHess,] = NA
+minAIC <- min(df.aic$AIC, na.rm=T)
+df.aic$dAIC <- round(df.aic$AIC - minAIC,1)
+df.mods <- cbind(data.frame(Model=paste0("m",1:n.mods), Selectivity=sel_model,
+                            "Block1_re"=sapply(sel_re, function(x) x[[1]]),
+                            "opt_converged"= ifelse(conv, "Yes", "No"),
+                            "pd_hessian"= ifelse(pdHess, "Yes", "No"),
+                            "NLL"=sapply(mods, function(x) round(x$opt$objective,3)),
+                            "Runtime"=sapply(mods, function(x) x$runtime)), 
+                            'npar'=sapply(mods,function(x){length(x$opt$par)}),df.aic)
+rownames(df.mods) <- NULL
+df.mods
+
+# save results table
+# write.csv(df.mods, file="ex4_table.csv",quote=F, row.names=F)
+
+```
+
+### Model comparison
+
+
+#### Selex
+
+```{r}
+# plot the models estimates of selectivity-at-age for block 1 (fleet).
+# selAA block 1 plots
+selAA <- lapply(mods, function(x) x$report()$selAA[[1]])
+sel_mod <- factor(c("Age-specific")[sapply(mods, function(x) x$env$data$selblock_models[1])], levels=c("Age-specific"))
+sel_cor <- factor(c("None","IID","AR1","AR1_y","2D AR1")[sapply(mods, function(x) x$env$data$selblock_models_re[1])], levels=c("None","IID","AR1","AR1_y","2D AR1"))
+df.selAA <- data.frame(matrix(NA, nrow=0, ncol=length( my_model$input$ages.lab)+5))
+colnames(df.selAA) <- c(paste0("Age_", 1:11),"Year","Model","conv","sel_mod","sel_cor")
+for(m in 1:n.mods){
+  df <- as.data.frame(selAA[[m]])
+  df$Year <- input$years
+  colnames(df) <- c(paste0("Age_", 1:11),"Year")
+  df$Model <- m
+  df$conv <- ifelse(df.mods$pd_hessian[m]=="Yes",1,0)
+  df$sel_mod = sel_mod[m]
+  df$sel_cor = sel_cor[m]
+  df.selAA <- rbind(df.selAA, df)
+}
+df <- df.selAA %>% pivot_longer(-c(Year,Model,conv,sel_mod,sel_cor),
+                                names_to = "Age",
+                                names_prefix = "Age_",
+                                names_transform = list(Age = as.integer),
+                                values_to = "Selectivity")
+df$Age <- as.integer(df$Age)
+df$sel_mod <- factor(df$sel_mod, levels=c("Logistic","Age-specific"))
+df$sel_cor <- factor(df$sel_cor, levels=c("None","IID","AR1","AR1_y","2D AR1"))
+df$conv = factor(df$conv)
+
+# png(file.path(getwd(),"selAA.png"), width = 8, height = 7.5, res = 200, units='in')
+# print(
+  ggplot(df, aes(x=Year, y=Age)) +
+        geom_tile(aes(fill=Selectivity)) +
+        # geom_tile(aes(fill=Selectivity, alpha=conv)) +
+        # scale_alpha_discrete(range=c(0.4,1), guide=FALSE) +
+        # geom_label(aes(x=Year, y=Age, label=lab), size=5, alpha=1, #fontface = "bold",
+        #            data=data.frame(Year=1978.5, Age=5.8, lab=paste0("m",1:length(mods)), sel_mod=sel_mod, sel_cor=sel_cor)) +
+        facet_grid(rows=vars(sel_cor), cols=vars(sel_mod)) +
+        viridis::scale_fill_viridis() +
+        theme_bw() +
+        scale_x_continuous(expand=c(0,0)) +
+        scale_y_continuous(expand=c(0,0))
+  # )
+# dev.off()
+
+  
+  df %>% 
+    ggplot()+
+    geom_line(aes(Age,Selectivity,col=Year,group=Year))+ facet_wrap(~Model)
+  
+    df %>% mutate(Model=as.factor(Model)) %>% 
+      # filter(Model %in% c(1,2)) %>%
+    ggplot()+
+    geom_line(aes(Age,Selectivity,col=Model,group=Model))+ facet_wrap(~Year)
+    
+    
+df %>% mutate(Model=as.factor(Model)) %>% 
+      # filter(Model %in% c(1,2)) %>%
+    ggplot()+
+      geom_line(aes(Age,Selectivity,col=Model,group=Model))+ facet_grid(Year~Model)+
+      scale_x_continuous(breaks = c(1:11))+
+      theme(strip.text.y = element_blank(),
+                strip.background.y = element_blank(),legend.position='none',
+                panel.spacing.y = unit(.01, 'cm'))
+```
+
+
+### M1
+
+```{r}
+
+input <- prepare_wham_input(model_name = 'Case1_empiricalWAA',
+                                basic_info = input_data,
+                                # N1_model=1: 2 fixed effects parameters: an
+                                # initial recruitment and an instantaneous
+                                # fishing mortality rate to generate an
+                                # equilibrium abundance at age.
+                                NAA_re = list(N1_model = 1,
+                                              N1_pars = c(1e+05, 0), # initial numbers in the first age class, and equilib F rate generating the rest of the NAA in the first year
+                                              recruit_model = 2, # # estimating a mean recruitment with yearly recruitment as random effects
+                                              recruit_pars = 1e+05, # mean rec
+                                              sigma = 'rec', # rand eff on rec devs, all other ages deterministic
+                                              cor = 'iid'),
+                            # FLAG! Jim, what are the M assumptions in amak? arep$Mest what are these values?
+                                M = list(model = 'constant', initial_means = 0.3),
+                                # selectivity = list(model = c('double-normal', 'double-normal'),
+                                #                    initial_pars = list(c(6,-0.5,0,0,-5,-3), c(5,-2,0,0,-5,-3)),
+                                #                    n_selblocks = 2),
+                                selectivity = list(model = c('age-specific', 'age-specific'),
+                                                   initial_pars = list(scales::rescale(colMeans(arep$sel_fsh_1[,-c(1,2)])),
+                                                                       scales::rescale(colMeans(arep$sel_ind_1[,-c(1,2)]))),
+                                                   fix_pars = list(6:7, 8),
+                                                   n_selblocks = 2),
+                                catchability = list(initial_q = 1))
+
+input$map$logit_selpars
+# show_selex(model = "double-normal", initial_pars = c(6,-0.5,0,0,-5,-3), ages = input_data$ages)
+
+# Fix some parameters:
+input$map$logit_q = factor(NA)
+input$map$log_N1_pars = factor(c(1,NA))
+
+my_model = wham::fit_wham(MakeADFun.silent = TRUE, input = input, do.retro = FALSE, do.osa = FALSE)
+
+
+```
+
+## New AMAK with double ligistic
+
+```{r}
+
+arep_dlog <- PBSmodelling::readList("../mod22/sel3/For_R.rep")
+
+
+arep$SSB %>% as.data.frame() %>% 
+  # mutate(V2=V2*2) %>% 
+  mutate(version='time_var_selex') %>% 
+  bind_rows(arep_dlog$SSB %>% as.data.frame() %>% 
+  mutate(version='dlog_selex')) %>% 
+  ggplot()+geom_line(aes(V1,V2,col=version)) + 
+  labs(y='ssb',title='AMAK model comparison')+
+  theme()
+```
+
