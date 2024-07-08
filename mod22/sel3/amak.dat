@@ -1,0 +1,103 @@
+am2022.dat 
+#
+ Model_16.0b 
+#selectivity_shar_matrix 
+1 2  
+1 1 
+#Sr_type 
+2  
+#AgeError 
+1  
+#Retro 
+0
+ #surv_dwnwt 
+ #0  
+#cv_inc
+#100
+#n_comp
+#0.01
+#Steepness 
+0.8  300  -6  
+#SigmaR 
+0.6  15  4  
+#yrs_sr 
+1977   2019 
+#Linf
+74.4  0.1 -4                                                                                  
+#K
+0.16  0.1 -4                                                                                  
+#Lo_Len
+18  0.1 -4                                                                                  
+#Sigma_len
+0.09 0.1  -4                                                                                  
+#Natural_Mortality 
+0.3  0.05  -4  
+# NEW npars_mage
+0
+# NEW Mage_in
+# phase_Mage
+-5
+#Nyrs_Random_walk_M 
+0
+#Random_walk_M_yrs blank if nyrs==0
+#Random_walk_M_sigmas blank if nyrs==0
+#Random_walk_q_phases 
+-4
+#catchability 
+1  0.2  4  
+#q_power 
+1  0.2  -4  
+#Random_walk_q_phases 
+-1
+#Nyrs_Random_walk_q
+0
+#Random_walk_q_yrs blank if nyrs==0
+
+#Random_walk_q_sigmas blank if nyrs==0
+
+#q_agemin 
+4  
+#q_agemax 
+10  
+#junk 
+0.05  
+#n_proj_yrs 
+10  
+#Fsh_selopt_1 
+3  
+#  *(ad_comm::global_datafile) >> nselages_in_fsh(k)   ;  
+#  *(ad_comm::global_datafile) >> phase_sel_fsh(k);  
+#Fsh_nages_1 
+11  
+#Fsh_ph_1 
+4  
+#  *(ad_comm::global_datafile) >>  n_sel_ch_fsh(k) ;  
+0
+# *(ad_comm::global_datafile) >> sel_p1_in_fsh(k,1) ; // asc inflection
+4
+# *(ad_comm::global_datafile) >> sel_p2_in_fsh(k,1) ; // ages to 95% selected (added to p1
+4
+# *(ad_comm::global_datafile) >> sel_p3_in_fsh(k,1) ; // ages to desc infl
+3
+#Ind_selopt 
+1  
+# Selages
+10  
+# Phase Survey
+5  
+# sigma age-age
+0.5  
+# sigma Dome... 
+0.4  
+# Years of selectivity change survey 
+# nyrs fish selectivity changes
+0
+# Yrs fish selectivity changes
+#1987
+# sigm fish selectivity changes
+#0.7 
+# Initial values for coefficitients at each change (one for every change plus 1) 
+# 2 3 4 5 6 7 8 9 10 11 12  
+0.2 0.7 1 1 1 1 1 1 1 1 1 
+#Test  
+123456789  
