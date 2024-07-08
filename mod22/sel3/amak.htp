@@ -1,5 +1,5 @@
-#if !defined(_amak_)
-#  define _amak_
+#if !defined(_AMAK_)
+#  define _AMAK_
 
 class model_data : public ad_comm{
   int iseed;

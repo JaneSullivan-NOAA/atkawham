@@ -44,7 +44,7 @@ am2022.dat
 #Random_walk_q_phases 
 -4
 #catchability 
-1  0.2  4  
+1.56  0.2  -4  
 #q_power 
 1  0.2  -4  
 #Random_walk_q_phases 
